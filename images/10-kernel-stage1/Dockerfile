@@ -6,6 +6,7 @@ RUN apt-get --assume-yes update \
  && apt-get --assume-yes install \
     curl \
     initramfs-tools \
+    clevis-initramfs \
     kmod \
     lz4 \
     rsync \

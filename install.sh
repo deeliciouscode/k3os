@@ -2,7 +2,7 @@
 set -e
 
 PROG=$0
-PROGS="dd curl mkfs.ext4 mkfs.vfat fatlabel parted partprobe grub-install"
+PROGS="dd curl mkfs.ext4 mkfs.vfat fatlabel parted partprobe grub-install cryptsetup clevis"
 DISTRO=/run/k3os/iso
 
 if [ "$K3OS_DEBUG" = true ]; then
@@ -51,7 +51,7 @@ cleanup()
 
 usage()
 {
-    echo "Usage: $PROG [--force-efi] [--debug] [--tty TTY] [--poweroff] [--takeover] [--no-format] [--config https://.../config.yaml] DEVICE ISO_URL"
+    echo "Usage: $PROG [--force-efi] [--debug] [--tty TTY] [--poweroff] [--takeover] [--no-format] [--encrypt-fs] [--tang-server] [--luks-password] [--config https://.../config.yaml] DEVICE ISO_URL"
     echo ""
     echo "Example: $PROG /dev/vda https://github.com/rancher/k3os/releases/download/v0.8.0/k3os.iso"
     echo ""
@@ -61,6 +61,26 @@ usage()
     echo "more info."
     echo ""
     exit 1
+}
+
+do_encrypt()
+{
+    KEYFILE=/etc/keyfile_luks.key
+    if [ -z $K3OS_LUKS_PASSWORD ]; then
+        openssl genrsa 2048 > $KEYFILE
+    else
+        echo $K3OS_LUKS_PASSWORD > $KEYFILE
+    fi
+    
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ] && [ "$K3OS_INSTALL_NO_FORMAT" != "" ]; then
+        # find a way to skip user input for crypsetup
+        cryptsetup -q luksFormat $DEVICE --key-file $KEYFILE
+        cryptsetup -q luksOpen $DEVICE encrypted --key-file $KEYFILE
+    fi
+
+    if [ ! -z "$K3OS_TANG_SERVER_URL" ]; then
+        clevis luks bind -y -d $DEVICE -k $KEYFILE tang '{"url": "'${K3OS_TANG_SERVER_URL}'"}'
+    fi
 }
 
 do_format()
@@ -165,7 +185,7 @@ set gfxpayload=keep
 insmod all_video
 insmod gfxterm
 
-menuentry "k3OS Current" {
+menuentry "k3OS Current" {BOOT
   search.fs_label K3OS_STATE root
   set sqfile=/k3os/system/kernel/current/kernel.squashfs
   loopback loop0 /\$sqfile
@@ -299,6 +319,17 @@ while [ "$#" -gt 0 ]; do
         --no-format)
             K3OS_INSTALL_NO_FORMAT=true
             ;;
+        --encrypt-fs)
+            K3OS_ENCRYPT_FILESYSTEM=true
+            ;;
+        --tang-server)
+            shift 1
+            K3OS_TANG_SERVER_URL=$1
+            ;;
+        --luks-password)
+            shift 1
+            K3OS_LUKS_PASSWORD=$1
+            ;;
         --force-efi)
             K3OS_INSTALL_FORCE_EFI=true
             ;;
@@ -362,7 +393,9 @@ trap cleanup exit
 
 get_iso
 setup_style
-do_format
+# skip formatting for now 
+# do_format
+do_encrypt
 do_mount
 do_copy
 install_grub
