@@ -49,6 +49,7 @@ RUN apk --no-cache add \
     openrc \
     openssh-client \
     openssh-server \
+    openssl \
     parted \
     procps \
     qemu-guest-agent \

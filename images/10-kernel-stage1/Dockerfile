@@ -6,6 +6,7 @@ RUN apt-get --assume-yes update \
  && apt-get --assume-yes install \
     curl \
     initramfs-tools \
+    clevis-initramfs \
     kmod \
     lz4 \
     rsync \
@@ -40,7 +41,7 @@ RUN mkdir -p /usr/src/root && \
 RUN mkdir /usr/src/initrd && \
     rsync -a /usr/src/root/lib/ /lib/ && \
     depmod $KVERSION && \
-    mkinitramfs -k $KVERSION -c lz4 -o /usr/src/initrd.tmp
+    mkinitramfs -v -k $KVERSION -c lz4 -o /usr/src/initrd.tmp
 
 # Generate initrd firmware and module lists
 RUN mkdir -p /output/lib && \
