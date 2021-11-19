@@ -77,13 +77,22 @@ do_format()
 
     dd if=/dev/zero of=${DEVICE} bs=1M count=1
     parted -s ${DEVICE} mklabel ${PARTTABLE}
-    if [ "$PARTTABLE" = "gpt" ]; then
+    if [ "$PARTTABLE" = "gpt" ] && [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
         BOOT_NUM=1
+        OTHER_NUM=2
+        STATE_NUM=3
+        parted -s ${DEVICE} mkpart primary fat32 0% 50MB
+        parted -s ${DEVICE} mkpart primary ext4 50MB 1050MB
+        parted -s ${DEVICE} mkpart primary ext4 1050MB 2000MB
+    elif [ "$PARTTABLE" = "gpt" ]; then
+        BOOT_NUM=1
+        OTHER_NUM=
         STATE_NUM=2
         parted -s ${DEVICE} mkpart primary fat32 0% 50MB
         parted -s ${DEVICE} mkpart primary ext4 50MB 750MB
     else
         BOOT_NUM=
+        OTHER_NUM=
         STATE_NUM=1
         parted -s ${DEVICE} mkpart primary ext4 0% 700MB
     fi
@@ -104,12 +113,19 @@ do_format()
     if [ -n "${BOOT_NUM}" ]; then
         BOOT=${PREFIX}${BOOT_NUM}
     fi
+
+    if [ -n "${OTHER_NUM}" ]; then
+        OTHER=${PREFIX}${OTHER_NUM}
+    fi
     STATE=${PREFIX}${STATE_NUM}
 
     mkfs.ext4 -F -L K3OS_STATE ${STATE}
     if [ -n "${BOOT}" ]; then
         mkfs.vfat -F 32 ${BOOT}
         fatlabel ${BOOT} K3OS_GRUB
+    fi
+    if [ -n "${OTHER}" ]; then
+        mkfs.ext4 -F -L K3OS_OTHER ${OTHER}
     fi
 }
 
@@ -162,6 +178,9 @@ do_mount()
     fi
 
     mkdir -p ${TARGET}/boot
+    if [ -n "${OTHER}" ]; then
+        mount ${OTHER} ${TARGET}/boot/
+    fi
     if [ -n "${BOOT}" ]; then
         mkdir -p ${TARGET}/boot/efi
         mount ${BOOT} ${TARGET}/boot/efi
@@ -177,6 +196,10 @@ do_copy()
     if [ -n "$STATE_NUM" ]; then
         echo $DEVICE $STATE_NUM > $TARGET/k3os/system/growpart # TODO: probably change
     fi
+
+    mkdir -p $TARGET/boot/k3os/kernel/current
+    cp $TARGET/k3os/system/kernel/current/kernel.squashfs $TARGET/boot/k3os/kernel/current/kernel.squashfs
+    cp $TARGET/k3os/system/kernel/current/initrd $TARGET/boot/k3os/kernel/current/initrd
 
     if [ -n "$K3OS_INSTALL_CONFIG_URL" ]; then
         get_url "$K3OS_INSTALL_CONFIG_URL" ${TARGET}/k3os/system/config.yaml
@@ -202,7 +225,55 @@ install_grub()
     # cat > ${TARGET}/boot/grub/grub.cfg << EOF
 
     mkdir -p ${TARGET}/boot/grub
-    cat > ${TARGET}/boot/grub/grub.cfg << EOF
+
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        cat > ${TARGET}/boot/grub/grub.cfg << EOF
+set default=0
+set timeout=10
+
+set gfxmode=auto
+set gfxpayload=keep
+insmod all_video
+insmod gfxterm
+
+menuentry "k3OS Current" {
+  search.fs_label K3OS_OTHER root
+  set sqfile=/k3os/system/kernel/current/kernel.squashfs
+  loopback loop0 /\$sqfile
+  set root=(\$root)
+  linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 $GRUB_DEBUG
+  initrd /k3os/system/kernel/current/initrd
+}
+
+menuentry "k3OS Previous" {
+  search.fs_label K3OS_OTHER root
+  set sqfile=/k3os/system/kernel/previous/kernel.squashfs
+  loopback loop0 /\$sqfile
+  set root=(\$root)
+  linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 $GRUB_DEBUG
+  initrd /k3os/system/kernel/previous/initrd
+}
+
+menuentry "k3OS Rescue (current)" {
+  search.fs_label K3OS_OTHER root
+  set sqfile=/k3os/system/kernel/current/kernel.squashfs
+  loopback loop0 /\$sqfile
+  set root=(\$root)
+  linux (loop0)/vmlinuz printk.devkmsg=on rescue console=tty1
+  initrd /k3os/system/kernel/current/initrd
+}
+
+menuentry "k3OS Rescue (previous)" {
+  search.fs_label K3OS_OTHER root
+  set sqfile=/k3os/system/kernel/previous/kernel.squashfs
+  loopback loop0 /\$sqfile
+  set root=(\$root)
+  linux (loop0)/vmlinuz printk.devkmsg=on rescue console=tty1
+  initrd /k3os/system/kernel/previous/initrd
+}
+EOF
+    else
+        cat > ${TARGET}/boot/grub/grub.cfg << EOF
 set default=0
 set timeout=10
 
@@ -247,6 +318,7 @@ menuentry "k3OS Rescue (previous)" {
   initrd /k3os/system/kernel/previous/initrd
 }
 EOF
+    fi
 
     if [ -z "${K3OS_INSTALL_TTY}" ]; then
         TTY=$(tty | sed 's!/dev/!!')
@@ -339,6 +411,12 @@ validate_device()
 create_opt()
 {
     mkdir -p "${TARGET}/k3os/data/opt"
+}
+
+stop_script()
+{
+    echo "Forcefully exited script."
+    exit 1
 }
 
 while [ "$#" -gt 0 ]; do
