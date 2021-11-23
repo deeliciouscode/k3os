@@ -63,26 +63,6 @@ usage()
     exit 1
 }
 
-do_encrypt()
-{
-    KEYFILE=/etc/keyfile_luks.key
-    if [ -z $K3OS_LUKS_PASSWORD ]; then
-        openssl genrsa 2048 > $KEYFILE
-    else
-        echo $K3OS_LUKS_PASSWORD > $KEYFILE
-    fi
-    
-    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ] && [ "$K3OS_INSTALL_NO_FORMAT" != "" ]; then
-        # find a way to skip user input for crypsetup
-        cryptsetup -q luksFormat $DEVICE --key-file $KEYFILE
-        cryptsetup -q luksOpen $DEVICE encrypted --key-file $KEYFILE
-    fi
-
-    if [ ! -z "$K3OS_TANG_SERVER_URL" ]; then
-        clevis luks bind -y -d $DEVICE -k $KEYFILE tang '{"url": "'${K3OS_TANG_SERVER_URL}'"}'
-    fi
-}
-
 do_format()
 {
     if [ "$K3OS_INSTALL_NO_FORMAT" = "true" ]; then
@@ -133,11 +113,54 @@ do_format()
     fi
 }
 
+# to coorectly mount use mapper: https://www.drupal8.ovh/en/tutoriels/382/mount-luks-encrypted-volumes-command-line
+do_encrypt()
+{   
+    if [ -z $K3OS_ENCRYPT_FILESYSTEM ]; then
+        return 0
+    fi
+
+    if [ "$PARTTABLE" != "gpt" ]; then
+        echo "Can only encrypt filesystem if using gpt, not dos."
+        return 0
+    fi
+
+    sleep 2
+    KEYFILE=/etc/keyfile_luks.key
+    if [ -z $K3OS_LUKS_PASSWORD ]; then
+        openssl genrsa 2048 > $KEYFILE
+    else
+        echo $K3OS_LUKS_PASSWORD > $KEYFILE
+    fi
+    
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        echo "STATE is: $STATE"
+        CRYPT_MAPPER_NAME="decrypted"
+        cryptsetup -q luksFormat $STATE --key-file $KEYFILE
+        cryptsetup -q luksOpen $STATE $CRYPT_MAPPER_NAME --key-file $KEYFILE
+    fi
+
+    # if [ ! -z "$K3OS_TANG_SERVER_URL" ]; then
+    clevis luks bind -y -d $STATE -k $KEYFILE tang '{"url": "http://tang.moti.us"}' # ${K3OS_TANG_SERVER_URL}
+    # fi
+
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        mkfs.ext4 -F -L K3OS_STATE /dev/mapper/$CRYPT_MAPPER_NAME
+    fi 
+}
+
 do_mount()
 {
     TARGET=/run/k3os/target
     mkdir -p ${TARGET}
-    mount ${STATE} ${TARGET}
+    
+    # TODO: test this
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        mount /dev/mapper/$CRYPT_MAPPER_NAME $TARGET
+    else
+        mount ${STATE} ${TARGET}
+    fi
+
     mkdir -p ${TARGET}/boot
     if [ -n "${BOOT}" ]; then
         mkdir -p ${TARGET}/boot/efi
@@ -152,7 +175,7 @@ do_copy()
 {
     tar cf - -C ${DISTRO} k3os | tar xvf - -C ${TARGET}
     if [ -n "$STATE_NUM" ]; then
-        echo $DEVICE $STATE_NUM > $TARGET/k3os/system/growpart
+        echo $DEVICE $STATE_NUM > $TARGET/k3os/system/growpart # TODO: probably change
     fi
 
     if [ -n "$K3OS_INSTALL_CONFIG_URL" ]; then
@@ -175,6 +198,9 @@ install_grub()
         GRUB_DEBUG="k3os.debug"
     fi
 
+    # mkdir -p ${TARGET}/boot/grub
+    # cat > ${TARGET}/boot/grub/grub.cfg << EOF
+
     mkdir -p ${TARGET}/boot/grub
     cat > ${TARGET}/boot/grub/grub.cfg << EOF
 set default=0
@@ -185,7 +211,7 @@ set gfxpayload=keep
 insmod all_video
 insmod gfxterm
 
-menuentry "k3OS Current" {BOOT
+menuentry "k3OS Current" {
   search.fs_label K3OS_STATE root
   set sqfile=/k3os/system/kernel/current/kernel.squashfs
   loopback loop0 /\$sqfile
@@ -221,6 +247,7 @@ menuentry "k3OS Rescue (previous)" {
   initrd /k3os/system/kernel/previous/initrd
 }
 EOF
+
     if [ -z "${K3OS_INSTALL_TTY}" ]; then
         TTY=$(tty | sed 's!/dev/!!')
     else
@@ -242,7 +269,7 @@ EOF
         fi
     fi
 
-    grub-install ${GRUB_TARGET} --boot-directory=${TARGET}/boot --removable ${DEVICE}
+    grub-install ${GRUB_TARGET} --boot-directory=${TARGET}/boot --removable ${DEVICE} 
 }
 
 get_iso()
@@ -393,8 +420,7 @@ trap cleanup exit
 
 get_iso
 setup_style
-# skip formatting for now 
-# do_format
+do_format
 do_encrypt
 do_mount
 do_copy
