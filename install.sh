@@ -77,7 +77,12 @@ do_format()
 
     dd if=/dev/zero of=${DEVICE} bs=1M count=1
     parted -s ${DEVICE} mklabel ${PARTTABLE}
-    if [ "$PARTTABLE" = "gpt" ]; then
+    if [ "$PARTTABLE" = "gpt" ] && [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        BOOT_NUM=1
+        STATE_NUM=2
+        parted -s ${DEVICE} mkpart primary fat32 0% 200MB
+        parted -s ${DEVICE} mkpart primary ext4 200MB 100%
+    elif [ "$PARTTABLE" = "gpt" ]; then
         BOOT_NUM=1
         STATE_NUM=2
         parted -s ${DEVICE} mkpart primary fat32 0% 50MB
@@ -136,17 +141,27 @@ do_encrypt()
     if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
         echo "STATE is: $STATE"
         CRYPT_MAPPER_NAME="decrypted"
-        cryptsetup -q luksFormat $STATE --key-file $KEYFILE
-        cryptsetup -q luksOpen $STATE $CRYPT_MAPPER_NAME --key-file $KEYFILE
+        password | cryptsetup -q luksFormat --type luks1 $STATE # --key-file $KEYFILE
+        password | cryptsetup -q luksOpen $STATE $CRYPT_MAPPER_NAME # --key-file $KEYFILE
+        pvcreate /dev/mapper/$CRYPT_MAPPER_NAME
+        vgcreate vg0 /dev/mapper/$CRYPT_MAPPER_NAME
+        lvcreate -L 2G vg0 -n swap
+        lvcreate -L 2G vg0 -n boot
+        lvcreate -l 100%FREE vg0 -n root
+
+        mkfs.ext4 /dev/vg0/root        
+        mkfs.ext4 /dev/vg0/boot     
+        mffs.fat -F32  
+        mkswap /dev/vg0/swap       
     fi
 
     # if [ ! -z "$K3OS_TANG_SERVER_URL" ]; then
-    clevis luks bind -y -d $STATE -k $KEYFILE tang '{"url": "http://tang.moti.us"}' # ${K3OS_TANG_SERVER_URL}
+    # clevis luks bind -y -d $STATE -k $KEYFILE tang '{"url": "http://tang.moti.us"}' # ${K3OS_TANG_SERVER_URL}
     # fi
 
-    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
-        mkfs.ext4 -F -L K3OS_STATE /dev/mapper/$CRYPT_MAPPER_NAME
-    fi 
+    # if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+    #     mkfs.ext4 -F -L K3OS_STATE /dev/mapper/$CRYPT_MAPPER_NAME
+    # fi 
 }
 
 do_mount()
@@ -155,16 +170,21 @@ do_mount()
     mkdir -p ${TARGET}
     
     # TODO: test this
+    mkdir -p ${TARGET}/boot
     if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
-        mount /dev/mapper/$CRYPT_MAPPER_NAME $TARGET
+        mount -t ext4 /dev/vg0/root $TARGET
+        mount -t ext4 /dev/vg0/boot $TARGET/boot
     else
         mount ${STATE} ${TARGET}
     fi
 
-    mkdir -p ${TARGET}/boot
     if [ -n "${BOOT}" ]; then
         mkdir -p ${TARGET}/boot/efi
         mount ${BOOT} ${TARGET}/boot/efi
+    fi
+
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        swapon /dev/vg0/swap
     fi
 
     mkdir -p ${DISTRO}
@@ -175,7 +195,7 @@ do_copy()
 {
     tar cf - -C ${DISTRO} k3os | tar xvf - -C ${TARGET}
     if [ -n "$STATE_NUM" ]; then
-        echo $DEVICE $STATE_NUM > $TARGET/k3os/system/growpart # TODO: probably change
+        echo $DEVICE $STATE_NUM > ${TARGET}/k3os/system/growpart # TODO: probably change
     fi
 
     if [ -n "$K3OS_INSTALL_CONFIG_URL" ]; then
@@ -190,6 +210,11 @@ do_copy()
             touch ${TARGET}/k3os/system/poweroff
         fi
     fi
+
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        dd bs=512 count=4 if=/dev/urandom of=${TARGET}/crypto_keyfile.bin
+        cryptsetup luksAddKey /dev/sda2 ${TARGET}/crypto_keyfile.bin
+    fi
 }
 
 install_grub()
@@ -201,6 +226,11 @@ install_grub()
     # mkdir -p ${TARGET}/boot/grub
     # cat > ${TARGET}/boot/grub/grub.cfg << EOF
 
+    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
+        blkid -s UUID -o value /dev/sda2 > ~/uuid
+        cat ~/uuid | sed -e "s/-//" -e "s///" > ~/uuidnodash
+    fi
+
     mkdir -p ${TARGET}/boot/grub
     cat > ${TARGET}/boot/grub/grub.cfg << EOF
 set default=0
@@ -210,6 +240,32 @@ set gfxmode=auto
 set gfxpayload=keep
 insmod all_video
 insmod gfxterm
+
+menuentry 'k3OS test' {
+	load_video
+	set gfxpayload=keep
+	insmod gzio
+	insmod part_gpt
+	insmod cryptodisk
+	insmod luks
+	insmod gcry_rijndael
+	insmod gcry_rijndael
+	insmod gcry_sha512
+	insmod lvm
+	insmod ext2
+	cryptomount -u $(cat ~/uuidnodash)
+	set root='lvmid/LzCi7s-h7PK-27Ls-4c68-yLYH-kfxS-JFUpUZ/A9aJLP-Wc2G-8Pgg-MxVk-ej8w-Qbfy-kzrlQg'
+	if [ x$feature_platform_search_hint = xy ]; then
+	  search --no-floppy --fs-uuid --set=root --hint='lvmid/LzCi7s-h7PK-27Ls-4c68-yLYH-kfxS-JFUpUZ/A9aJLP-Wc2G-8Pgg-MxVk-ej8w-Qbfy-kzrlQg'  ac88ed98-3105-409d-8b97-63810bc9cee0
+	else
+	  search --no-floppy --fs-uuid --set=root ac88ed98-3105-409d-8b97-63810bc9cee0
+	fi
+	echo	'Loading Linux lts ...'
+	
+    linux	(loop0)/vmlinuz root=/dev/mapper/$CRYPT_MAPPER_NAME ro modules=sd-mod,usb-storage,ext4,luks,cryptodisk,part_gpt,lvm quiet rootfstype=ext4 cryptroot=UUID=$(cat ~/uuid) cryptdm=$CRYPT_MAPPER_NAME cryptkey console=tty1 $GRUB_DEBUG
+	echo	'Loading initial ramdisk ...'
+	initrd	/k3os/system/kernel/current/initrd
+}
 
 menuentry "k3OS Current" {
   search.fs_label K3OS_STATE root
@@ -418,6 +474,26 @@ validate_device
 
 trap cleanup exit
 
+write_config() 
+{
+
+cat > /etc/cloudinit.yaml << EOF
+k3os:
+  modules:
+  - kvm
+  - nvme
+  - usb
+  - kms
+  - keymap
+  - lvm
+  - ext4
+  - cryptsetup
+  - cryptkey
+  password: rancher
+EOF
+}
+
+write_config
 get_iso
 setup_style
 do_format
