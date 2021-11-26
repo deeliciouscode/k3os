@@ -67,6 +67,8 @@ RUN rm -rf \
     /usr/src/image/etc/os-release \
  && ln -s /usr/lib/os-release /usr/src/image/etc/os-release
 
+### MARK ### line 65
+
 RUN rm -rf \
     /usr/src/image/sbin/apk \
     /usr/src/image/usr/include \

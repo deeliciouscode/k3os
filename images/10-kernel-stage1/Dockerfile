@@ -25,6 +25,7 @@ RUN apt-get --assume-yes update \
  && echo 'ext4' >> /etc/initramfs-tools/modules \
  && echo 'lvm' >> /etc/initramfs-tools/modules \
  && echo 'cryptsetup' >> /etc/initramfs-tools/modules \
+ && echo 'cryptkey' >> /etc/initramfs-tools/modules \
  && echo 'keymap' >> /etc/initramfs-tools/modules \
  && echo 'kms' >> /etc/initramfs-tools/modules \
  && echo 'nvme' >> /etc/initramfs-tools/modules
