@@ -111,7 +111,9 @@ do_format()
     fi
     STATE=${PREFIX}${STATE_NUM}
 
-    mkfs.ext4 -F -L K3OS_STATE ${STATE}
+    if [ -z $K3OS_ENCRYPT_FILESYSTEM ]; then
+        mkfs.ext4 -F -L K3OS_STATE ${STATE}
+    fi
     if [ -n "${BOOT}" ]; then
         mkfs.vfat -F 32 ${BOOT}
         fatlabel ${BOOT} K3OS_GRUB
@@ -139,16 +141,7 @@ do_encrypt()
         CRYPT_MAPPER_NAME="decrypted"
         echo $K3OS_LUKS_PASSWORD | cryptsetup -q luksFormat --type luks1 $STATE
         echo $K3OS_LUKS_PASSWORD | cryptsetup -q luksOpen $STATE $CRYPT_MAPPER_NAME 
-        pvcreate /dev/mapper/$CRYPT_MAPPER_NAME
-        vgcreate vg0 /dev/mapper/$CRYPT_MAPPER_NAME
-        lvcreate -L 2G vg0 -n swap
-        lvcreate -L 2G vg0 -n boot
-        lvcreate -l 100%FREE vg0 -n root
-
-        mkfs.ext4 /dev/vg0/root        
-        mkfs.ext4 /dev/vg0/boot     
-        mkfs.fat -F32 /dev/sda1
-        mkswap /dev/vg0/swap       
+        mkfs.ext4 -F -L K3OS_STATE /dev/mapper/$CRYPT_MAPPER_NAME
     fi
 
     # if [ ! -z "$K3OS_TANG_SERVER_URL" ]; then
@@ -167,20 +160,14 @@ do_mount()
     
     # TODO: test this
     if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
-        mount -t ext4 /dev/vg0/root $TARGET
+        mount -t ext4 /dev/mapper/${CRYPT_MAPPER_NAME} $TARGET
     else
         mount ${STATE} ${TARGET}
     fi
 
+    mkdir -p ${TARGET}/boot/efi
     if [ -n "${BOOT}" ]; then
-        mkdir -p ${TARGET}/boot
-        mount -t ext4 /dev/vg0/boot $TARGET/boot
-        mkdir -p ${TARGET}/boot/efi
-        mount ${BOOT} ${TARGET}/boot/efi
-    fi
-
-    if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
-        swapon /dev/vg0/swap
+        mount -t vfat ${BOOT} ${TARGET}/boot/efi
     fi
 
     mkdir -p ${DISTRO}
@@ -209,7 +196,7 @@ do_copy()
 
     if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
         dd bs=512 count=4 if=/dev/urandom of=${TARGET}/crypto_keyfile.bin
-        echo $K3OS_LUKS_PASSWORD | cryptsetup luksAddKey /dev/sda2 ${TARGET}/crypto_keyfile.bin
+        echo $K3OS_LUKS_PASSWORD | cryptsetup luksAddKey $STATE ${TARGET}/crypto_keyfile.bin
     fi
 }
 
@@ -223,33 +210,22 @@ install_grub()
     # cat > ${TARGET}/boot/grub/grub.cfg << EOF
     # awk -F'"' '{print $2}'`
     if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
-        # ROOT_PART_UUID=$(blkid -s UUID -o value /dev/sda2 | awk -F'"' '{print $2}')
-        ROOT_PART_UUID=$(blkid -s UUID -o value /dev/sda2)
+        ROOT_PART_UUID=$(blkid -s UUID -o value ${STATE})
         ROOT_PART_UUID_NO_DASHES=$(echo "${ROOT_PART_UUID//-}")
-        # ROOT_VG_UUID=$(blkid -s UUID -o value /dev/mapper/vg0-root | awk -F'"' '{print $2}')
-        ROOT_VG_UUID=$(blkid -s UUID -o value /dev/mapper/vg0-root)
-        # BOOT_VG_UUID=$(blkid -s UUID -o value /dev/mapper/vg0-boot | awk -F'"' '{print $2}')
-        BOOT_VG_UUID=$(blkid -s UUID -o value /dev/mapper/vg0-boot)
-
-        VG_UUID=$(vgdisplay | grep "VG UUID" | awk '{print $NF}')
-        LV_UUID_ROOT=$(lvdisplay -v /dev/vg0/root | grep "LV UUID" | awk '{print $NF}')
-        LV_UUID_BOOT=$(lvdisplay -v /dev/vg0/boot | grep "LV UUID" | awk '{print $NF}')
+        ROOT_MAPPER_UUID=$(blkid -s UUID -o value /dev/mapper/${CRYPT_MAPPER_NAME})
 
         echo "Values for grub.cfg:"
         echo "ROOT_PART_UUID = ${ROOT_PART_UUID}"
         echo "ROOT_PART_UUID_NO_DASHES = ${ROOT_PART_UUID_NO_DASHES}"
-        echo "ROOT_VG_UUID = ${ROOT_VG_UUID}"
-        echo "BOOT_VG_UUID = ${BOOT_VG_UUID}"
-        echo "VG_UUID = ${VG_UUID}"
-        echo "LV_UUID_ROOT = ${LV_UUID_ROOT}"
-        echo "LV_UUID_BOOT = ${LV_UUID_BOOT}"
+        echo "ROOT_MAPPER_UUID = ${ROOT_MAPPER_UUID}"
+
 
         echo "GRUB_CMDLINE_LINUX_DEFAULT=\"cryptroot=UUID=${ROOT_PART_UUID} cryptdm=lvmcrypt cryptkey\"" >> /etc/default/grub
         echo "GRUB_PRELOAD_MODULES=\"luks cryptodisk part_gpt lvm\"" >> /etc/default/grub
         echo "GRUB_ENABLE_CRYPTODISK=y" >> /etc/default/grub
 
-        echo "The grub default:"
-        cat /etc/default/grub
+        # echo "The grub default:"
+        # cat /etc/default/grub
 
         # stop_script
     fi
@@ -330,15 +306,13 @@ insmod luks
 insmod gcry_rijndael
 insmod gcry_rijndael
 insmod gcry_sha256
-insmod lvm
 insmod ext2
-echo 'pre cryptomount 1 ...'
-cryptomount -u $ROOT_PART_UUID_NO_DASHES
-set root='lvmid/${VG_UUID}/${LV_UUID_ROOT}'
+cryptomount -u ${ROOT_PART_UUID_NO_DASHES}
+set root='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'
 if [ x\$feature_platform_search_hint = xy ]; then
-  search --no-floppy --fs-uuid --set=root --hint='lvmid/${VG_UUID}/${LV_UUID_ROOT}'  ${ROOT_VG_UUID}
+  search --no-floppy --fs-uuid --set=root --hint='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'  ${ROOT_MAPPER_UUID}
 else
-  search --no-floppy --fs-uuid --set=root ${ROOT_VG_UUID}
+  search --no-floppy --fs-uuid --set=root ${ROOT_MAPPER_UUID}
 fi
     font="/usr/share/grub/unicode.pf2"
 fi
@@ -359,40 +333,8 @@ else
 fi
 ### END /etc/grub.d/00_header ###
 
-menuentry "k3OS Current" {
-  load_video
-  set gfxpayload=keep
-  insmod gzio
-  insmod part_gpt
-  insmod cryptodisk
-  insmod luks
-  insmod gcry_rijndael
-  insmod gcry_rijndael
-  insmod gcry_sha256
-  insmod lvm
-  insmod ext2
-  echo	'pre cryptomount 2 ...'
-  cryptomount -u $ROOT_PART_UUID_NO_DASHES
-  
-  echo	'pre set root ...'
-  set root='lvmid/${VG_UUID}/${LV_UUID_BOOT}'
-  if [ x\$feature_platform_search_hint = xy ]; then
-	  search --no-floppy --fs-uuid --set=root --hint='lvmid/${VG_UUID}/${LV_UUID_BOOT}'  ${BOOT_VG_UUID}
-	else
-	  search --no-floppy --fs-uuid --set=root ${BOOT_VG_UUID}
-  fi
-  echo	'pre set sqfile ...'
-  set sqfile=/k3os/system/kernel/current/kernel.squashfs
-  echo	'pre loopback ...'
-  loopback loop0 /\$sqfile
-  echo	'pre linux ...'
-  linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 root=/dev/mapper/vg0-root ro  modules=sd-mod,usb-storage,ext4 quiet rootfstype=ext4 cryptroot=UUID=$ROOT_PART_UUID cryptdm=lvmcrypt cryptkey $GRUB_DEBUG
-  echo	'pre initrd ...'
-  initrd /k3os/system/kernel/current/initrd
-}
-
 ### BEGIN /etc/grub.d/10_linux ###
-menuentry 'Alpine, with Linux lts' --class alpine --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-lts-advanced-${ROOT_VG_UUID}' {
+menuentry 'k3OS Current (Alpine, with Linux lts)' --class alpine --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-lts-advanced-${ROOT_MAPPER_UUID}' {
 	load_video
 	set gfxpayload=keep
 	insmod gzio
@@ -402,45 +344,68 @@ menuentry 'Alpine, with Linux lts' --class alpine --class gnu-linux --class gnu 
 	insmod gcry_rijndael
 	insmod gcry_rijndael
 	insmod gcry_sha256
-	insmod lvm
-	insmod ext2
-	cryptomount -u $ROOT_PART_UUID_NO_DASHES
-	set root='lvmid/${VG_UUID}/${LV_UUID_BOOT}'
+	insmod ext2  
+    echo 'pre cryptomount...'
+	cryptomount -u ${ROOT_PART_UUID_NO_DASHES}
+	set root='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'
 	if [ x\$feature_platform_search_hint = xy ]; then
-	  search --no-floppy --fs-uuid --set=root --hint='lvmid/${VG_UUID}/${LV_UUID_BOOT}'  ${BOOT_VG_UUID}
+      echo 'pre search then...'
+	  search --no-floppy --fs-uuid --set=root --hint='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'  ${ROOT_MAPPER_UUID}
 	else
-	  search --no-floppy --fs-uuid --set=root ${BOOT_VG_UUID}
+      echo 'pre search else...'
+	  search --no-floppy --fs-uuid --set=root ${ROOT_MAPPER_UUID}
 	fi
-	echo	'Loading Linux lts ...'
-	linux	/vmlinuz-lts root=/dev/mapper/vg0-root ro  modules=sd-mod,usb-storage,ext4 quiet rootfstype=ext4 cryptroot=UUID=$ROOT_PART_UUID cryptdm=lvmcrypt cryptkey
-	echo	'Loading initial ramdisk ...'
-	initrd	/initramfs-lts
+    echo 'pre set sqfile ...'
+    set sqfile=/k3os/system/kernel/current/kernel.squashfs
+    echo 'pre loopback ...'
+    loopback loop0 /\$sqfile
+    echo 'pre linux ...'
+    linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 root=UUID=${ROOT_MAPPER_UUID} ro  modules=sd-mod,usb-storage,ext4 quiet rootfstype=ext4 cryptroot=UUID=${ROOT_PART_UUID} cryptdm=decrypted cryptkey $GRUB_DEBUG
+    echo	'pre initrd ...'
+    initrd /k3os/system/kernel/current/initrd
 }
 
-# menuentry 'Alpine, with Linux lts' --class alpine --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-lts-advanced-${ROOT_VG_UUID}' {
-# 	load_video
-# 	set gfxpayload=keep
-# 	insmod gzio
-# 	insmod part_gpt
-# 	insmod cryptodisk
-# 	insmod luks
-# 	insmod gcry_rijndael
-# 	insmod gcry_rijndael
-# 	insmod gcry_sha256
-# 	insmod lvm
-# 	insmod ext2
-# 	cryptomount -u $ROOT_PART_UUID_NO_DASHES
-# 	set root='lvmid/${VG_UUID}/${LV_UUID_BOOT}'
-# 	if [ x\$feature_platform_search_hint = xy ]; then
+# menuentry "k3OS Current" {
+#   search.fs_label K3OS_STATE root
+#   set sqfile=/k3os/system/kernel/current/kernel.squashfs
+#   loopback loop0 /\$sqfile
+#   set root=(\$root)
+#   linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 $GRUB_DEBUG
+#   initrd /k3os/system/kernel/current/initrd
+# }
+
+# menuentry "k3OS Current" {
+#   load_video
+#   set gfxpayload=keep
+#   insmod gzio
+#   insmod part_gpt
+#   insmod cryptodisk
+#   insmod luks
+#   insmod gcry_rijndael
+#   insmod gcry_rijndael
+#   insmod gcry_sha256
+#   insmod lvm
+#   insmod ext2
+#   echo	'pre cryptomount 2 ...'
+#   cryptomount -u $ROOT_PART_UUID_NO_DASHES
+  
+#   echo	'pre set root ...'
+#   set root='lvmid/${VG_UUID}/${LV_UUID_BOOT}'
+#   if [ x\$feature_platform_search_hint = xy ]; then
 # 	  search --no-floppy --fs-uuid --set=root --hint='lvmid/${VG_UUID}/${LV_UUID_BOOT}'  ${BOOT_VG_UUID}
 # 	else
 # 	  search --no-floppy --fs-uuid --set=root ${BOOT_VG_UUID}
-# 	fi
-# 	echo	'Loading Linux lts ...'
-# 	linux	/vmlinuz-lts root=/dev/mapper/vg0-root ro  modules=sd-mod,usb-storage,ext4 quiet rootfstype=ext4 cryptroot=UUID=$ROOT_PART_UUID cryptdm=lvmcrypt cryptkey
-# 	echo	'Loading initial ramdisk ...'
-# 	initrd	/initramfs-lts
+#   fi
+#   echo	'pre set sqfile ...'
+#   set sqfile=/k3os/system/kernel/current/kernel.squashfs
+#   echo	'pre loopback ...'
+#   loopback loop0 /\$sqfile
+#   echo	'pre linux ...'
+#   linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 root=/dev/mapper/vg0-root ro  modules=sd-mod,usb-storage,ext4 quiet rootfstype=ext4 cryptroot=UUID=$ROOT_PART_UUID cryptdm=lvmcrypt cryptkey $GRUB_DEBUG
+#   echo	'pre initrd ...'
+#   initrd /k3os/system/kernel/current/initrd
 # }
+
 
 ### END /etc/grub.d/10_linux ###
 
@@ -470,7 +435,6 @@ elif [ -z "\${config_directory}" -a -f  \$prefix/custom.cfg ]; then
   source \$prefix/custom.cfg
 fi
 ### END /etc/grub.d/41_custom ###
-
 
 
 ###########################################################################################
