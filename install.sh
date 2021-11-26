@@ -247,8 +247,15 @@ install_grub()
         echo "VG_UUID = ${VG_UUID}"
         echo "LV_UUID_ROOT = ${LV_UUID_ROOT}"
         echo "LV_UUID_BOOT = ${LV_UUID_BOOT}"
-        
-        stop_script
+
+        echo "GRUB_CMDLINE_LINUX_DEFAULT=\"cryptroot=UUID=${ROOT_PART_UUID} cryptdm=lvmcrypt cryptkey\"" >> /etc/default/grub
+        echo "GRUB_PRELOAD_MODULES=\"luks cryptodisk part_gpt lvm\"" >> /etc/default/grub
+        echo "GRUB_ENABLE_CRYPTODISK=y" >> /etc/default/grub
+
+        echo "The grub default:"
+        cat /etc/default/grub
+
+        # stop_script
     fi
 
     mkdir -p ${TARGET}/boot/grub
