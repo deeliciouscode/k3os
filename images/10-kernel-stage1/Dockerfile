@@ -15,7 +15,19 @@ RUN apt-get --assume-yes update \
  && echo 'hfs' >> /etc/initramfs-tools/modules \
  && echo 'hfsplus' >> /etc/initramfs-tools/modules \
  && echo 'nls_utf8' >> /etc/initramfs-tools/modules \
- && echo 'nls_iso8859_1' >> /etc/initramfs-tools/modules
+ && echo 'nls_iso8859_1' >> /etc/initramfs-tools/modules \
+ && echo 'ata' >> /etc/initramfs-tools/modules \
+ && echo 'base' >> /etc/initramfs-tools/modules \
+ && echo 'ide' >> /etc/initramfs-tools/modules \
+ && echo 'scsi' >> /etc/initramfs-tools/modules \
+ && echo 'usb' >> /etc/initramfs-tools/modules \
+ && echo 'virtio' >> /etc/initramfs-tools/modules \
+ && echo 'ext4' >> /etc/initramfs-tools/modules \
+ && echo 'lvm' >> /etc/initramfs-tools/modules \
+ && echo 'cryptsetup' >> /etc/initramfs-tools/modules \
+ && echo 'keymap' >> /etc/initramfs-tools/modules \
+ && echo 'kms' >> /etc/initramfs-tools/modules \
+ && echo 'nvme' >> /etc/initramfs-tools/modules
 
 ARG ARCH
 ENV KVERSION=5.4.0-88-generic
