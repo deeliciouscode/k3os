@@ -130,19 +130,15 @@ do_encrypt()
         return 0
     fi
 
-    sleep 2
-    KEYFILE=/etc/keyfile_luks.key
-    if [ -z $K3OS_LUKS_PASSWORD ]; then
-        openssl genrsa 2048 > $KEYFILE
-    else
-        echo $K3OS_LUKS_PASSWORD > $KEYFILE
+    if [ -z $K3OS_LUKS_PASSWORD ]; then 
+        K3OS_LUKS_PASSWORD="rancher" # TODO: DO NOT ALLOW DEFAULT 
     fi
     
     if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
-        echo "STATE is: $STATE"
+        # echo "STATE is: $STATE"
         CRYPT_MAPPER_NAME="decrypted"
-        echo password | cryptsetup -q luksFormat --type luks1 $STATE # --key-file $KEYFILE
-        echo password | cryptsetup -q luksOpen $STATE $CRYPT_MAPPER_NAME # --key-file $KEYFILE
+        echo $K3OS_LUKS_PASSWORD | cryptsetup -q luksFormat --type luks1 $STATE
+        echo $K3OS_LUKS_PASSWORD | cryptsetup -q luksOpen $STATE $CRYPT_MAPPER_NAME 
         pvcreate /dev/mapper/$CRYPT_MAPPER_NAME
         vgcreate vg0 /dev/mapper/$CRYPT_MAPPER_NAME
         lvcreate -L 2G vg0 -n swap
@@ -213,7 +209,7 @@ do_copy()
 
     if [ "$K3OS_ENCRYPT_FILESYSTEM" = "true" ]; then
         dd bs=512 count=4 if=/dev/urandom of=${TARGET}/crypto_keyfile.bin
-        echo password | cryptsetup luksAddKey /dev/sda2 ${TARGET}/crypto_keyfile.bin
+        echo $K3OS_LUKS_PASSWORD | cryptsetup luksAddKey /dev/sda2 ${TARGET}/crypto_keyfile.bin
     fi
 }
 
