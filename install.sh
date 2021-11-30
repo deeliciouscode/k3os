@@ -248,146 +248,68 @@ install_grub()
 
 set default=0
 set timeout=10
+set gfxmode=auto
+set gfxpayload=keep
 
 insmod luks
 insmod cryptodisk
 insmod part_gpt
-insmod lvm
+insmod gzio
+insmod gcry_rijndael
+insmod gcry_sha256
+insmod ext2
+insmod all_video
+insmod gfxterm
 
-if [ -s \$prefix/grubenv ]; then
-  load_env
-fi
-if [ "\${next_entry}" ] ; then
-  set default="\${next_entry}"
-  set next_entry=
-  save_env next_entry
-  set boot_once=true
-else
-  set default="0"
-fi
-
-if [ x"\${feature_menuentry_id}" = xy ]; then
-  menuentry_id_option="--id"
-else
-  menuentry_id_option=""
-fi
-
-export menuentry_id_option
-
-if [ "\${prev_saved_entry}" ]; then
-  set saved_entry="\${prev_saved_entry}"
-  save_env saved_entry
-  set prev_saved_entry=
-  save_env prev_saved_entry
-  set boot_once=true
-fi
-
-function savedefault {
-  if [ -z "\${boot_once}" ]; then
-    saved_entry="\${chosen}"
-    save_env saved_entry
-  fi
-}
-
-function load_video {
-  if [ x\$feature_all_video_module = xy ]; then
-    insmod all_video
-  else
-    insmod efi_gop
-    insmod efi_uga
-    insmod ieee1275_fb
-    insmod vbe
-    insmod vga
-    insmod video_bochs
-    insmod video_cirrus
-  fi
-}
-
-if [ x\$feature_default_font_path = xy ] ; then
-  font=unicode
-else
-  insmod part_gpt
-  insmod cryptodisk
-  insmod luks
-  insmod gcry_rijndael
-  insmod gcry_rijndael
-  insmod gcry_sha256
-  insmod ext2
-  cryptomount -u ${ROOT_PART_UUID_NO_DASHES}
-  set root='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'
-  if [ x\$feature_platform_search_hint = xy ]; then
-    search --no-floppy --fs-uuid --set=root --hint='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'  ${ROOT_MAPPER_UUID}
-  else
-    search --no-floppy --fs-uuid --set=root ${ROOT_MAPPER_UUID}
-  fi
-  font="/usr/share/grub/unicode.pf2"
-fi
-
-if loadfont \$font ; then
-  set gfxmode=auto
-  load_video
-  insmod gfxterm
-fi
-terminal_output gfxterm
-if [ x\$feature_timeout_style = xy ] ; then
-  set timeout_style=menu
-  set timeout=2
-else
-  set timeout=2
-fi
-
-menuentry 'k3OS Current (Alpine, with Linux lts)' --class alpine --class gnu-linux --class gnu --class os \$menuentry_id_option 'gnulinux-lts-advanced-${ROOT_MAPPER_UUID}' {
-	load_video
-    set gfxmode=auto
-	set gfxpayload=keep
-    insmod all_video
-    insmod gfxterm
-	insmod gzio
-	insmod part_gpt
-	insmod cryptodisk
-	insmod luks
-	insmod gcry_rijndael
-	insmod gcry_rijndael
-	insmod gcry_sha256
-	insmod ext2  
+menuentry 'k3OS Current (Inspired from Alpine (UUID))' {
     echo 'pre cryptomount...'
 	cryptomount -u ${ROOT_PART_UUID_NO_DASHES}
+
+    echo 'pre set root ...'
 	set root='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'
-	if [ x\$feature_platform_search_hint = xy ]; then
-      echo 'pre search then...'
-	  search --no-floppy --fs-uuid --set=root --hint='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'  ${ROOT_MAPPER_UUID}
-	else
-      echo 'pre search else...'
-	  search --no-floppy --fs-uuid --set=root ${ROOT_MAPPER_UUID}
-	fi
+    
+    echo 'pre search ...'
+    search --no-floppy --fs-uuid --set=root ${ROOT_MAPPER_UUID}
+    
     echo 'pre set sqfile ...'
     set sqfile=/k3os/system/kernel/current/kernel.squashfs
+    
     echo 'pre loopback ...'
     loopback loop0 /\$sqfile
+    
     echo 'pre linux ...'
     linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 root=UUID=${ROOT_MAPPER_UUID} ro modules=sd-mod,usb-storage,ext4 quiet rootfstype=ext4 cryptroot=UUID=${ROOT_PART_UUID} cryptdm=${CRYPT_MAPPER_NAME} cryptkey $GRUB_DEBUG
+    
     echo	'pre initrd ...'
     initrd /k3os/system/kernel/current/initrd
 }
 
-# menuentry "k3OS Current" {
-#   search.fs_label K3OS_STATE root
-#   set sqfile=/k3os/system/kernel/current/kernel.squashfs
-#   loopback loop0 /\$sqfile
-#   set root=(\$root)
-#   linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 $GRUB_DEBUG
-#   initrd /k3os/system/kernel/current/initrd
-# }
+menuentry 'k3OS Current (Inspired from Alpine (LABEL))' {
+    echo 'pre cryptomount...'
+	cryptomount -u ${ROOT_PART_UUID_NO_DASHES}
+
+    echo 'pre set root ...'
+	set root='cryptouuid/${ROOT_PART_UUID_NO_DASHES}'
+    
+    echo 'pre search ...'
+    search.fs_label K3OS_STATE root
+    
+    echo 'pre set sqfile ...'
+    set sqfile=/k3os/system/kernel/current/kernel.squashfs
+    
+    echo 'pre loopback ...'
+    loopback loop0 /\$sqfile
+    
+    echo 'pre linux ...'
+    linux (loop0)/vmlinuz printk.devkmsg=on console=tty1 root=UUID=${ROOT_MAPPER_UUID} ro modules=sd-mod,usb-storage,ext4 quiet rootfstype=ext4 cryptroot=UUID=${ROOT_PART_UUID} cryptdm=${CRYPT_MAPPER_NAME} cryptkey $GRUB_DEBUG
+    
+    echo	'pre initrd ...'
+    initrd /k3os/system/kernel/current/initrd
+}
 
 menuentry 'UEFI Firmware Settings' \$menuentry_id_option 'uefi-firmware' {
 	fwsetup
 }
-
-if [ -f  \${config_directory}/custom.cfg ]; then
-  source \${config_directory}/custom.cfg
-elif [ -z "\${config_directory}" -a -f  \$prefix/custom.cfg ]; then
-  source \$prefix/custom.cfg
-fi
 EOF
     else
         cat > ${TARGET}/boot/grub/grub.cfg << EOF
@@ -427,7 +349,7 @@ menuentry "k3OS Rescue (previous)" {
   loopback loop0 /\$sqfile
   set root=(\$root)
   linux (loop0)/vmlinuz printk.devkmsg=on rescue console=tty1
-  initrd /k3os/system/kernel/previous/initrd
+  initrd /k3os/system/kernel/previous/initrd-
 }
 EOF
     fi 

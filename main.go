@@ -16,11 +16,18 @@ import (
 )
 
 func main() {
+	if os.Getenv("ENTER_DEBUG") == "true" {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
+
+	logrus.Debugf("Entered main().")
 	reexec.Register("/init", initrd)      // mode=live
 	reexec.Register("/sbin/init", initrd) // mode=local
+	logrus.Debugf("pre enter-root.")
 	reexec.Register("enter-root", enterchroot.Enter)
 
 	if !reexec.Init() {
+		logrus.Debugf("Entered !reexec.Init().")
 		app := app.New()
 		args := []string{app.Name}
 		path := filepath.Base(os.Args[0])

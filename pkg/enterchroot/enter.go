@@ -44,6 +44,7 @@ func Enter() {
 	logrus.Debug("Running bootstrap")
 	err := run(os.Getenv("ENTER_DATA"))
 	if err != nil {
+		logrus.Debugf("Custom Error just to see if I am on the right track...")
 		logrus.Fatal(err)
 	}
 }
@@ -208,6 +209,7 @@ func inFile() (string, uint64, error) {
 }
 
 func run(data string) error {
+	logrus.Debugf("data: %s", data)
 	mounted, err := mount.Mounted(data)
 	if err != nil {
 		return errors.Wrapf(err, "checking %s mounted", data)
