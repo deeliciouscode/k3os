@@ -602,23 +602,22 @@ validate_device
 
 trap cleanup exit
 
-# write_config() 
-# {
-#     cat > /etc/cloudinit.yaml << EOF
-# k3os:
-#   modules:
-#   - kvm
-#   - nvme
-#   - usb
-#   - kms
-#   - keymap
-#   - lvm
-#   - ext4
-#   - cryptsetup
-#   - cryptkey
-#   password: rancher
-# EOF
-# }
+write_config() 
+{
+    cat > /etc/cloudinit.yaml << EOF
+k3os:
+  modules:
+    - kvm
+    - nvme
+    - kms
+    - keymap
+    - lvm
+    - ext4
+    - cryptsetup
+    - cryptkey
+  password: rancher
+EOF
+}
 
 # stop_script()
 # {
@@ -626,7 +625,7 @@ trap cleanup exit
 #     exit 1
 # }
 
-# write_config
+write_config
 get_iso
 setup_style
 do_format
